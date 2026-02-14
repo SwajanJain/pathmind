@@ -10,51 +10,81 @@ log = logging.getLogger(__name__)
 class GTExClient(BaseHttpClient):
     """Client for the GTEx Portal REST API v2."""
 
-    async def fetch_median_expression(self, gene_symbol: str) -> list[dict]:
-        """Return median gene-level TPM per tissue from GTEx v8.
+    async def resolve_gene(self, gene_symbol: str) -> dict | None:
+        """Resolve a gene symbol to its GTEx gencodeId and Ensembl ID.
 
-        Returns a list of dicts ready for ``_merge_expression_rows``:
-        ``[{gene_symbol, tissue, gtex_tpm, gtex_present, ...}, ...]``
+        Returns ``{"gencodeId": "ENSG00000160868.14", "ensemblId": "ENSG00000160868",
+        "geneSymbol": "CYP3A4"}`` or ``None`` if not found.
         """
         gene_key = gene_symbol.strip().upper()
         if not gene_key:
+            return None
+
+        response = await self.request(
+            "GET",
+            "/reference/gene",
+            params={
+                "geneId": gene_key,
+                "gencodeVersion": "v26",
+                "genomeBuild": "GRCh38/hg38",
+            },
+        )
+        payload = response.json()
+        items = payload.get("data") or []
+        if not items:
+            return None
+
+        item = items[0]
+        gencode_id = item.get("gencodeId", "")
+        ensembl_id = gencode_id.split(".")[0] if gencode_id else ""
+        return {
+            "gencodeId": gencode_id,
+            "ensemblId": ensembl_id,
+            "geneSymbol": item.get("geneSymbol") or gene_key,
+        }
+
+    async def fetch_median_expression(self, gencode_id: str, gene_symbol: str = "") -> list[dict]:
+        """Return median gene-level TPM per tissue from GTEx v8.
+
+        *gencode_id* should be a versioned Gencode ID (e.g. ``ENSG00000160868.14``).
+        Use :meth:`resolve_gene` to obtain it from a gene symbol.
+
+        Returns a list of dicts ready for ``_merge_expression_rows``.
+        """
+        if not gencode_id:
             return []
 
         response = await self.request(
             "GET",
             "/expression/medianGeneExpression",
             params={
-                "geneSymbol": gene_key,
+                "gencodeId": gencode_id,
                 "datasetId": "gtex_v8",
             },
         )
         payload = response.json()
+        items = payload.get("data") or []
 
-        # The API wraps results under a "medianGeneExpression" key
-        items = payload.get("medianGeneExpression") or payload.get("data") or []
-        if isinstance(payload, list):
-            items = payload
+        gene_key = gene_symbol.strip().upper() or gencode_id
 
         rows: list[dict] = []
         for item in items:
-            tissue = (
-                item.get("tissueSiteDetailId")
-                or item.get("tissue")
-                or item.get("tissueSiteDetail")
-                or ""
-            )
-            tissue = _normalise_tissue(str(tissue).strip())
+            tissue_id = item.get("tissueSiteDetailId") or ""
+            tissue = _normalise_tissue(str(tissue_id).strip())
             if not tissue:
                 continue
-            raw_tpm = item.get("median") or item.get("medianTpm") or item.get("tpm")
+            raw_tpm = item.get("median")
             try:
-                tpm = float(raw_tpm) if raw_tpm not in {None, ""} else None
+                tpm = float(raw_tpm) if raw_tpm is not None else None
             except (ValueError, TypeError):
                 tpm = None
 
+            # Use geneSymbol from response if available
+            symbol = item.get("geneSymbol") or gene_key
+
             rows.append(
                 {
-                    "gene_symbol": gene_key,
+                    "gene_symbol": symbol.strip().upper(),
                     "uniprot_id": None,
                     "tissue": tissue,
                     "gtex_tpm": tpm,

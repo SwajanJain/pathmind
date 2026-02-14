@@ -8,98 +8,97 @@ log = logging.getLogger(__name__)
 
 
 class HPAClient(BaseHttpClient):
-    """Client for the Human Protein Atlas (proteinatlas.org) JSON API."""
+    """Client for the Human Protein Atlas (proteinatlas.org) JSON API.
 
-    async def fetch_tissue_expression(self, gene_symbol: str) -> list[dict]:
-        """Fetch RNA + protein tissue data for *gene_symbol*.
+    The HPA gene-page JSON is served at ``/{ENSEMBL_ID}.json``.
+    Use the GTEx ``resolve_gene`` helper to obtain the Ensembl ID from a
+    gene symbol before calling :meth:`fetch_tissue_expression`.
+    """
+
+    async def fetch_tissue_expression(self, ensembl_id: str, gene_symbol: str = "") -> list[dict]:
+        """Fetch RNA tissue nTPM for the given Ensembl gene ID.
 
         Returns rows matching the ``_merge_expression_rows`` format:
         ``[{gene_symbol, tissue, hpa_rna_nx, hpa_protein_level, hpa_present, ...}, ...]``
         """
-        gene_key = gene_symbol.strip().upper()
-        if not gene_key:
+        ensembl_key = ensembl_id.strip()
+        if not ensembl_key:
             return []
 
-        response = await self.request("GET", f"/{gene_key}.json")
+        response = await self.request("GET", f"/{ensembl_key}.json")
         payload = response.json()
 
-        # HPA returns a list with one element per gene entry
+        # HPA may return a list with one element
         if isinstance(payload, list):
             gene_entry = payload[0] if payload else {}
         else:
             gene_entry = payload
 
-        rna_tissues = gene_entry.get("rna_tissue") or []
-        protein_tissues = gene_entry.get("tissue") or []
-
-        # Build lookup of protein levels keyed by tissue name
-        protein_by_tissue: dict[str, str] = {}
-        for item in protein_tissues:
-            tissue_raw = (item.get("tissue") or item.get("name") or "").strip()
-            level = (item.get("level") or "").strip()
-            if tissue_raw and level:
-                canonical = _normalise_tissue(tissue_raw)
-                # Keep the highest level if multiple entries per tissue
-                if canonical not in protein_by_tissue or _level_rank(level) > _level_rank(protein_by_tissue[canonical]):
-                    protein_by_tissue[canonical] = level
+        gene_key = (
+            gene_symbol.strip().upper()
+            or (gene_entry.get("Gene") or "").strip().upper()
+            or ensembl_key
+        )
 
         rows: list[dict] = []
-        seen_tissues: set[str] = set()
 
-        for item in rna_tissues:
-            tissue_raw = (item.get("tissue") or item.get("name") or "").strip()
-            if not tissue_raw:
-                continue
-            tissue = _normalise_tissue(tissue_raw)
-            if tissue in seen_tissues:
-                continue
-            seen_tissues.add(tissue)
+        # Primary data source: "RNA tissue specific nTPM" — a dict of {tissue: nTPM}
+        rna_ntpm = gene_entry.get("RNA tissue specific nTPM") or {}
+        if isinstance(rna_ntpm, dict):
+            for tissue_raw, ntpm_value in rna_ntpm.items():
+                tissue = _normalise_tissue(str(tissue_raw).strip())
+                if not tissue:
+                    continue
+                try:
+                    nx = float(ntpm_value) if ntpm_value is not None else None
+                except (ValueError, TypeError):
+                    nx = None
 
-            raw_nx = item.get("value") or item.get("nx") or item.get("tpm")
-            try:
-                nx = float(raw_nx) if raw_nx not in {None, ""} else None
-            except (ValueError, TypeError):
-                nx = None
+                rows.append(
+                    {
+                        "gene_symbol": gene_key,
+                        "uniprot_id": None,
+                        "tissue": tissue,
+                        "gtex_tpm": None,
+                        "hpa_rna_nx": nx,
+                        "hpa_protein_level": None,
+                        "gtex_present": False,
+                        "hpa_present": nx is not None,
+                    }
+                )
 
-            protein_level = protein_by_tissue.get(tissue)
+        # Fallback: older HPA format with "rna_tissue" array
+        if not rows:
+            rna_tissues = gene_entry.get("rna_tissue") or []
+            seen: set[str] = set()
+            for item in rna_tissues:
+                tissue_raw = (item.get("tissue") or item.get("name") or "").strip()
+                if not tissue_raw:
+                    continue
+                tissue = _normalise_tissue(tissue_raw)
+                if tissue in seen:
+                    continue
+                seen.add(tissue)
+                raw_nx = item.get("value") or item.get("nx") or item.get("tpm")
+                try:
+                    nx = float(raw_nx) if raw_nx not in {None, ""} else None
+                except (ValueError, TypeError):
+                    nx = None
+                rows.append(
+                    {
+                        "gene_symbol": gene_key,
+                        "uniprot_id": None,
+                        "tissue": tissue,
+                        "gtex_tpm": None,
+                        "hpa_rna_nx": nx,
+                        "hpa_protein_level": None,
+                        "gtex_present": False,
+                        "hpa_present": nx is not None,
+                    }
+                )
 
-            rows.append(
-                {
-                    "gene_symbol": gene_key,
-                    "uniprot_id": None,
-                    "tissue": tissue,
-                    "gtex_tpm": None,
-                    "hpa_rna_nx": nx,
-                    "hpa_protein_level": protein_level,
-                    "gtex_present": False,
-                    "hpa_present": nx is not None or protein_level is not None,
-                }
-            )
-
-        # Add any protein-only tissues not already in RNA list
-        for tissue, level in protein_by_tissue.items():
-            if tissue in seen_tissues:
-                continue
-            seen_tissues.add(tissue)
-            rows.append(
-                {
-                    "gene_symbol": gene_key,
-                    "uniprot_id": None,
-                    "tissue": tissue,
-                    "gtex_tpm": None,
-                    "hpa_rna_nx": None,
-                    "hpa_protein_level": level,
-                    "gtex_present": False,
-                    "hpa_present": True,
-                }
-            )
-
-        log.debug("HPA returned %d tissue rows for %s", len(rows), gene_key)
+        log.debug("HPA returned %d tissue rows for %s (%s)", len(rows), gene_key, ensembl_key)
         return rows
-
-
-def _level_rank(level: str) -> int:
-    return {"Not detected": 0, "Low": 1, "Medium": 2, "High": 3}.get(level, -1)
 
 
 def _normalise_tissue(raw: str) -> str:

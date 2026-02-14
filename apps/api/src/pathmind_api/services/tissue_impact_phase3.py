@@ -64,16 +64,28 @@ class TissueImpactServicePhase3:
                 if datetime.now(timezone.utc) - newest < self.cache_ttl:
                     return
 
-        all_rows: list[dict] = []
+        # Resolve gene symbol → gencodeId + ensemblId
+        gencode_id = ""
+        ensembl_id = ""
         if self.gtex_client is not None:
             try:
-                all_rows.extend(await self.gtex_client.fetch_median_expression(gene_key))
+                gene_info = await self.gtex_client.resolve_gene(gene_key)
+                if gene_info:
+                    gencode_id = gene_info.get("gencodeId", "")
+                    ensembl_id = gene_info.get("ensemblId", "")
+            except Exception:
+                log.warning("GTEx gene resolution failed for %s", gene_key, exc_info=True)
+
+        all_rows: list[dict] = []
+        if self.gtex_client is not None and gencode_id:
+            try:
+                all_rows.extend(await self.gtex_client.fetch_median_expression(gencode_id, gene_key))
             except Exception:
                 log.warning("GTEx fetch failed for %s in tissue-impact", gene_key, exc_info=True)
 
-        if self.hpa_client is not None:
+        if self.hpa_client is not None and ensembl_id:
             try:
-                all_rows.extend(await self.hpa_client.fetch_tissue_expression(gene_key))
+                all_rows.extend(await self.hpa_client.fetch_tissue_expression(ensembl_id, gene_key))
             except Exception:
                 log.warning("HPA fetch failed for %s in tissue-impact", gene_key, exc_info=True)
 
@@ -86,7 +98,7 @@ class TissueImpactServicePhase3:
             upsert_gene_identifier_map(
                 session,
                 gene_symbol=row["gene_symbol"],
-                ensembl_id=None,
+                ensembl_id=ensembl_id or None,
                 uniprot_id=row.get("uniprot_id"),
                 aliases=[],
             )

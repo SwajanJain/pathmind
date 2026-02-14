@@ -148,18 +148,30 @@ class TissueExpressionServicePhase3:
                 if datetime.now(timezone.utc) - newest < self.cache_ttl:
                     return  # cache hit — data is fresh
 
-        # Fetch from APIs
-        all_rows: list[dict] = []
+        # Resolve gene symbol → gencodeId + ensemblId via GTEx reference
+        gencode_id = ""
+        ensembl_id = ""
         if self.gtex_client is not None:
             try:
-                gtex_rows = await self.gtex_client.fetch_median_expression(gene_key)
+                gene_info = await self.gtex_client.resolve_gene(gene_key)
+                if gene_info:
+                    gencode_id = gene_info.get("gencodeId", "")
+                    ensembl_id = gene_info.get("ensemblId", "")
+            except Exception:
+                log.warning("GTEx gene resolution failed for %s", gene_key, exc_info=True)
+
+        # Fetch from APIs
+        all_rows: list[dict] = []
+        if self.gtex_client is not None and gencode_id:
+            try:
+                gtex_rows = await self.gtex_client.fetch_median_expression(gencode_id, gene_key)
                 all_rows.extend(gtex_rows)
             except Exception:
                 log.warning("GTEx API fetch failed for %s — proceeding without GTEx", gene_key, exc_info=True)
 
-        if self.hpa_client is not None:
+        if self.hpa_client is not None and ensembl_id:
             try:
-                hpa_rows = await self.hpa_client.fetch_tissue_expression(gene_key)
+                hpa_rows = await self.hpa_client.fetch_tissue_expression(ensembl_id, gene_key)
                 all_rows.extend(hpa_rows)
             except Exception:
                 log.warning("HPA API fetch failed for %s — proceeding without HPA", gene_key, exc_info=True)
@@ -175,7 +187,7 @@ class TissueExpressionServicePhase3:
             upsert_gene_identifier_map(
                 session,
                 gene_symbol=row["gene_symbol"],
-                ensembl_id=None,
+                ensembl_id=ensembl_id or None,
                 uniprot_id=row.get("uniprot_id"),
                 aliases=[],
             )
