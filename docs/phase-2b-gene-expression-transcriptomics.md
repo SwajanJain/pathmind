@@ -2,6 +2,16 @@
 
 > Accepts user-uploaded differential expression data, performs pathway enrichment, infers transcription factor activity, and connects drug-target effects to downstream expression changes.
 
+## Phase 2B Defaults (P0)
+
+- **Default enrichment:** local/offline Reactome gene sets + GSEApy (deterministic and reproducible).
+- **Cross-check (optional):** Reactome Analysis Service as validation, not the default.
+- **Mapping default:** HGNC complete set as primary mapping; UniProt API fallback for misses/ambiguity.
+- **Async model:** uploads/enrichment/TF activity become `job_id` workflows only when request time exceeds practical HTTP limits.
+- **Versioning:** store `version_snapshot` including gene-set version/date and mapping version/date.
+
+See `/Users/swajanjain/Documents/Projects/Pathway-Impact/docs/next-phase-principles.md:1`.
+
 ---
 
 ## 1. DEG Upload & Parsing
@@ -32,17 +42,19 @@ Users may upload HGNC symbols, Ensembl IDs, or Entrez IDs. The system must map t
 
 **Mapping pipeline:**
 1. Detect input ID type (regex patterns: `ENSG\d+` = Ensembl, `^\d+$` = Entrez, else HGNC symbol)
-2. Map to UniProt via local `HUMAN_9606_idmapping.dat` lookup table (~500MB compressed, from UniProt FTP)
-3. Resolve ambiguous mappings: prefer Swiss-Prot (reviewed) entry, then canonical isoform (no dash suffix)
-4. Resolve aliases/previous symbols via HGNC complete set (`hgnc_complete_set.txt` from EBI)
-5. Cache the mapping table; refresh on data update cycle
+2. Map via **HGNC complete set** (symbol/alias → canonical symbol → UniProt) as the primary path
+3. For misses/ambiguity, fallback to **UniProt API** lookups and cache the result
+4. Resolve ambiguous mappings with clear rules:
+   - prefer reviewed (Swiss-Prot) when available
+   - prefer canonical isoform (no dash suffix) unless user explicitly requests isoforms
+5. Store mapping outcomes with explicit `unknown` state when unresolved (do not drop silently)
 
 **Data files to maintain:**
 | File | Source | Size | Update Frequency |
 |------|--------|------|-----------------|
-| `HUMAN_9606_idmapping.dat.gz` | UniProt FTP | ~500MB | Quarterly |
-| `hgnc_complete_set.txt` | EBI/HGNC FTP | ~15MB | Monthly |
-| Reactome GMT (C2:CP:REACTOME) | MSigDB | ~2MB | Per Reactome release |
+| `hgnc_complete_set.txt` | EBI/HGNC | ~15MB | Monthly |
+| Reactome gene sets (GMT) | MSigDB / Reactome exports | ~MBs | Per Reactome release |
+| (Optional) UniProt idmapping dump | UniProt | large | Only if you need fully offline mapping |
 
 ---
 
@@ -64,10 +76,10 @@ Users may upload HGNC symbols, Ensembl IDs, or Entrez IDs. The system must map t
 
 ### 2.2 Pathway Gene Sets
 
-**Primary: MSigDB C2:CP:REACTOME GMT files**
-- Human-only, HGNC symbol identifiers
-- Standard GMT format compatible with GSEApy
-- Curated, versioned
+**Primary (default): Local Reactome gene sets (GMT)**
+- Run enrichment offline via GSEApy for speed and reproducibility.
+- Record the gene-set version/date in `version_snapshot`.
+- Avoid bundling restricted datasets in the repo; prefer “download on first run” + cached local copy.
 
 **Secondary: Reactome Analysis Service (server-side)**
 ```
@@ -287,6 +299,15 @@ When a protein is BOTH a drug target AND has expression changes:
 - Split node or donut chart: outer ring = expression, inner = binding
 - Tooltip: "EGFR: Drug target (Ki = 0.3 nM) | mRNA: log2FC = -1.2, padj = 0.003"
 
+### 6.4 Explicit Unknown States (Required)
+
+Do not let missing data masquerade as “no effect”:
+
+- **Unmapped genes:** show counts and a downloadable list (`unknown` mapping state).
+- **Ambiguous genes/IDs:** surface the ambiguity and the rule chosen (or require user selection for high-impact cases).
+- **Missing statistics:** if `padj` is missing, mark significance as `unknown` and avoid rendering “non-significant” styling.
+- **Cell-line caveats:** when using LINCS signatures, label the cell line, dose, and timepoint; absence of agreement is `unknown`, not “discordant”.
+
 ---
 
 ## 7. New API Endpoints
@@ -380,3 +401,4 @@ CREATE TABLE tf_activity_results (
 4. At least one visualization shows the drug -> target -> TF -> gene causal chain
 5. Expression overlay colors pathway nodes by log2FC with significance indicators
 6. L1000 cross-reference shows known drug expression profile when available
+7. Given the same input and `version_snapshot`, enrichment/TF outputs are deterministic (golden fixtures enforced in CI)

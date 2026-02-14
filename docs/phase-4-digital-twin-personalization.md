@@ -2,6 +2,24 @@
 
 > Accepts patient-specific genomic/transcriptomic data, provides pharmacogenomic predictions, patient-specific pathway activity, and lays groundwork for mechanistic simulation.
 
+## Phase 4 Defaults (P0)
+
+See `/Users/swajanjain/Documents/Projects/Pathway-Impact/docs/next-phase-principles.md:1`.
+
+- **Tri-state evidence for recommendations:** any “avoid/adjust/ok” recommendation must render `positive|negative|unknown` explicitly (no silent missing data).
+- **Reproducibility:** every patient run stores a `version_snapshot` (PharmCAT version, CPIC guideline versions, PharmGKB release/date, plus any mapping/enrichment versions used).
+- **Local-first privacy:** default to *ephemeral* processing for VCF/expression inputs; do not store raw VCF contents. Store only derived summaries unless the user explicitly opts in.
+- **Minimal async (required):** treat PharmCAT and any large ingestion as jobs (`job_id` + polling endpoints) rather than long synchronous HTTP requests.
+- **No auth by default (local use):** keep Phase 4 runnable locally without accounts. If deployed for multiple people, add the smallest viable gate (shared secret / basic auth) before building full auth.
+- **Language posture:** “digital twin” is fine for internal vision, but anything user-facing must clearly state “research use” and avoid implying clinical validity.
+
+## Privacy & Safety (Required)
+
+- **Treat uploads as sensitive:** VCF/expression files are personal data. Default to ephemeral processing and never include raw uploads in logs, error traces, or share links.
+- **Tight input validation:** enforce size limits, strict parsing, and clear rejection for malformed inputs (do not attempt “best effort” parsing silently).
+- **Safe execution:** run PharmCAT with fixed args, in a dedicated temp directory, with CPU/memory/time limits; never interpolate user input into shell commands.
+- **Explicit deletion controls:** provide “delete patient profile” that removes derived PGx/expression results from disk/DB for the local instance.
+
 ---
 
 ## 1. Multi-Omics Integration
@@ -83,6 +101,18 @@ Step 4: Clinical Recommendations (CPIC guidelines)
   |-- Drug-specific dosing adjustments or therapeutic alternatives
   |-- Evidence level: 1A (strongest) to 4 (preliminary)
 ```
+
+### 2.3.1 Required Evidence & Unknown-State Rules (PGx)
+
+PGx results are only “world class” if they are honest about coverage and uncertainty.
+
+- **Tri-state per drug recommendation:**
+  - `positive`: evidence supports avoid/adjust/switch for this drug given the patient’s called phenotype/genotype.
+  - `negative`: evidence supports standard dosing / no action given the patient’s called phenotype/genotype.
+  - `unknown`: any missingness that could change the conclusion (gene not called, low coverage, guideline missing, unsupported ancestry/calling limits, or CYP2D6 structural uncertainty).
+- **No coverage ≠ normal:** if a gene is not callable (or outside PharmCAT support), render `unknown`, not “normal metabolizer”.
+- **CYP2D6 structural caveat:** VCF-only calling is often insufficient; when copy-number is uncertain, downgrade the recommendation to `unknown` for drugs where CYP2D6 matters.
+- **Show provenance in the UI:** surface PharmCAT report id (or hash), guideline id/version, and the exact genotype/phenotype inputs used.
 
 ### 2.4 Example Outputs
 
@@ -330,8 +360,9 @@ Frontend:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/v1/patient/upload-vcf` | Upload and process VCF file |
-| `POST` | `/api/v1/patient/upload-expression` | Upload expression matrix |
+| `POST` | `/api/v1/patient/upload-vcf` | Submit VCF processing as a job (returns `job_id`) |
+| `POST` | `/api/v1/patient/upload-expression` | Submit expression processing as a job (returns `job_id`) |
+| `GET` | `/api/v1/jobs/{job_id}` | Poll job status/result pointer (shared async primitive) |
 | `GET` | `/api/v1/patient/{id}/pgx` | Get pharmacogenomic results |
 | `GET` | `/api/v1/patient/{id}/pgx/drug/{drug_id}` | Get drug-specific PGx recommendation |
 | `GET` | `/api/v1/patient/{id}/pathway-activity` | Get patient pathway activity scores |
@@ -352,6 +383,8 @@ CREATE TABLE patient_profiles (
     has_expression BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- Note: for local/no-auth operation, `user_id` can be NULL and patients are scoped to a single local instance.
 
 -- PGx results
 CREATE TABLE pgx_results (
@@ -443,3 +476,4 @@ CREATE TABLE patient_pathway_activity (
 3. Patient pathway activity scores overlay on existing pathway visualizations (if expression data provided)
 4. Combined drug response prediction shows suitability with clear confidence indicators
 5. System degrades gracefully: VCF-only still provides full PGx value without expression data
+6. Every recommendation and risk flag renders `positive|negative|unknown` explicitly and includes a `version_snapshot`

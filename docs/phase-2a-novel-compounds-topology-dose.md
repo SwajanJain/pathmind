@@ -2,6 +2,15 @@
 
 > Extends PathMind beyond known drugs to arbitrary molecules, adds pathway wiring diagrams, and introduces dose-aware target profiling.
 
+## Phase 2A Defaults (P0)
+
+- **Scientific integrity:** predicted targets must never look like measured targets.
+- **Explicit unknowns:** missing evidence is rendered as `unknown`, never silently omitted.
+- **Versioning:** every run/export includes a `version_snapshot` (Reactome release and prediction method/version).
+- **API namespace:** Phase 2+ endpoints use `/api/v1/...` (V1 can remain on `/api/...`).
+
+See `/Users/swajanjain/Documents/Projects/Pathway-Impact/docs/next-phase-principles.md:1`.
+
 ---
 
 ## 1. Novel Compound Support (SMILES Input)
@@ -19,7 +28,7 @@ Accept any small molecule via SMILES string, predict its likely protein targets,
 | Salt-strip / neutralize | `rdMolStandardize.LargestFragmentChooser` + `Uncharger` | Remove counterions, neutralize charges |
 | Generate fingerprint | `AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048)` | ECFP4 equivalent |
 
-**Dependency:** `pip install rdkit` (v2024.03+)
+**Dependency:** RDKit (pin a version and test in the same runtime environment you ship, e.g. Python 3.11 in Docker).
 
 ### 1.3 Target Prediction Strategy
 
@@ -57,6 +66,20 @@ GET https://www.ebi.ac.uk/chembl/api/data/similarity/{SMILES}/{threshold}.json
 | Low / speculative | Tanimoto < 0.6 or model probability < 0.5 | Dotted border, grayed, collapsed by default |
 
 Always show evidence: most similar known compound(s), their measured activities, and the similarity score.
+
+### 1.6 Required Model: Measured vs Predicted Targets
+
+Predicted targets must not be serialized as if they have assays.
+
+Minimum evidence fields per target:
+
+- `evidence_type`: `measured` | `predicted_similarity` | `predicted_model`
+- `potency`: either `measured_pchembl_median` (measured) or `predicted_pchembl_range` (predicted)
+- `evidence`: supporting items (e.g., similar compound ids, similarity score, originating assay ids if any)
+- `unknowns`: explicit list of missing/assumed facts (e.g., “no assays exist for this exact compound”)
+
+Minimum scoring rule for Phase 2A:
+- Keep the pathway score formula, but apply a **confidence discount** for predicted targets (measured=1.0; predicted tiers <1.0). The discount must be explicit and visible in UI/export metadata.
 
 ### 1.5 Effort Estimate
 
@@ -202,6 +225,8 @@ Where Bottom=0, Top=100, n=1 (standard Hill slope). Show as detail view when use
 | `GET` | `/api/v1/drug/{id}/selectivity` | Return sorted target list with potency bands |
 | `GET` | `/api/v1/drug/{id}/occupancy?concentration=100nM` | Return targets engaged at given concentration |
 
+**Execution model:** `/predict-targets` may be async if it performs similarity → activity fanout. Use the minimal jobs model (submit → job_id → poll) when needed.
+
 ---
 
 ## 5. New Dependencies
@@ -249,3 +274,11 @@ CREATE TABLE predicted_targets (
 3. Pathway topology view shows at least Reactome link-out with highlighted drug targets
 4. Selectivity waterfall plot renders for any analyzed drug with 2+ targets
 5. Concentration slider dynamically filters displayed targets by occupancy threshold
+
+## 8. UI: Explicit Unknown States
+
+Three states must be visually distinct:
+
+- **Measured:** assays exist for this compound-target
+- **Predicted:** inferred from similarity/model with explicit evidence
+- **Unknown:** no evidence available (must never be interpreted as “safe”)

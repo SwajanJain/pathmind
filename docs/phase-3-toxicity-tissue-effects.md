@@ -2,6 +2,15 @@
 
 > Adds tissue expression overlays, toxicity pathway flagging, dose-toxicity modeling, and adverse outcome pathway (AOP) chain display.
 
+## Phase 3 Defaults (P0)
+
+- **Tri-state evidence everywhere:** `positive` | `negative` | `unknown` (never treat missing data as “safe”).
+- **Versioning:** store dataset versions/dates in `version_snapshot` for GTEx/HPA/DILIrank/AOP-Wiki and any assay-derived metrics.
+- **Local-first datasets:** preload GTEx/HPA/DILIrank/AOP-Wiki locally for fast, deterministic lookups.
+- **Scope posture:** this phase produces *risk flags with evidence*, not clinical predictions.
+
+See `/Users/swajanjain/Documents/Projects/Pathway-Impact/docs/next-phase-principles.md:1`.
+
 ---
 
 ## 1. Tissue-Specific Expression Overlay
@@ -61,6 +70,16 @@ CREATE TABLE tissue_expression (
 
 **Start with:** Horizontal bar chart for single-gene views (simplest, most readable). Add heatmap matrix for pathway-level analysis showing all targets across key tissues.
 
+### 1.5 Required Missing-Data & Uncertainty Rules
+
+This feature is a *measurement overlay*, but any *derived claim* like “expressed in liver” must follow explicit unknown-state rules.
+
+- **Identifier mapping first:** map `target → gene_symbol → Ensembl/UniProt` using a recorded mapping version (see Phase 2B). If mapping fails, expression is `unknown` (do not assume 0).
+- **GTEx values are measured only when present:** if the dataset lookup returns no row for the gene, render `unknown` and show why (“gene not present in GTEx matrix” vs “mapping failed”).
+- **Do not convert missing to zero:** a missing tissue value is `unknown`, not “not expressed”.
+- **Keep “low” separate from “unknown”:** low TPM / HPA “Not detected” is *measured low*, not missing.
+- **Surface scope caveats:** GTEx is healthy tissue; HPA has antibody/assay limitations. Display “dataset scope” beside plots.
+
 ---
 
 ## 2. Toxicity Pathway Flagging
@@ -98,9 +117,12 @@ for pathway_id, pathway_genes in TOXICITY_PATHWAYS.items():
 ```
 
 **Traffic light display:**
-- Red: multiple signals or high-confidence hit (e.g., direct hERG binding)
-- Yellow: moderate concern, single signal
-- Green: no signals detected
+- Red: evidence of concern (tested positive or strong mechanistic overlap)
+- Yellow: moderate concern (single signal or weaker evidence)
+- Green: evidence of no concern (tested negative)
+- Gray/“?”: **unknown** (not tested / not available / insufficient evidence)
+
+**Rule:** if evidence is missing, the UI must show `unknown`. Do not show nothing.
 
 ---
 
@@ -137,6 +159,11 @@ For every analyzed drug:
 3. If hERG data exists, calculate safety margin against known/predicted Cmax
 4. Display prominently in toxicity summary
 
+**Tri-state requirement:**
+- If hERG assays exist: `positive` or `negative` based on IC50/margin thresholds with provenance (assay count, summary stat).
+- If no hERG assays exist: `unknown` (explicitly rendered; not green).
+- If Cmax_free is missing: margin is `unknown` even if IC50 exists; show IC50-only with `unknown` margin.
+
 ---
 
 ## 4. DILI (Drug-Induced Liver Injury) Risk
@@ -158,6 +185,11 @@ Combine multiple signals:
 2. **Pathway analysis:** Does the drug interact with CYP metabolism, GSH conjugation, or bile acid pathways?
 3. **Reactive metabolite risk:** CYP2E1 or CYP3A4 metabolism can generate reactive metabolites
 4. **BSEP inhibition:** If the drug inhibits bile salt export pump (ABCB11), flag cholestatic risk
+
+**Tri-state requirement:**
+- If the drug is found in DILIrank: `positive`/`negative` according to category with dataset version recorded.
+- If the drug is not found: `unknown` (do not imply “no DILI risk”; it only means “not in this dataset”).
+- If DILIrank dataset is unavailable/stale: `unknown` with explicit error state.
 
 ### 4.3 LiverTox (NIH/NLM)
 
@@ -195,6 +227,11 @@ For each analyzed compound:
 2. Fetch bioactivity results (AC50, hit-call) across ToxCast assays
 3. Map positive hits to toxicity categories
 4. Display as a toxicity profile panel
+
+**Tri-state requirement:**
+- If assay results exist: render `positive` or `negative` per assay/category thresholds with provenance (assay ids, AC50 summary).
+- If no mapping to CompTox / no assay coverage: `unknown`.
+- If API key/config missing: `unknown` (and explain the missing dependency).
 
 ---
 
@@ -237,6 +274,14 @@ Drug X --inhibits--> hERG (MIE)
   --> QT prolongation (KE)
   --> Torsades de Pointes (AO)
 ```
+
+### 6.5 Tri-state Requirement (AOP Chains)
+
+AOP-Wiki is not a comprehensive “all hazards” database. Therefore:
+
+- If one or more targets match an MIE/KE with a traceable chain: render `positive` with the exact matched node(s) and AOP-Wiki version/date.
+- If no AOP match is found for the targets: render `unknown` (not `negative`). Absence of a chain in AOP-Wiki is not evidence of safety.
+- If dataset is unavailable/stale: render `unknown` with explicit error state.
 
 ---
 
@@ -284,6 +329,8 @@ A table with 6-8 key tissues:
 
 Color-coded cells with expandable detail view per tissue.
 
+**Missing-data rule:** if any required inputs for an impact cell are missing (Kp estimate inputs, expression, or potency), mark that cell as `unknown` and show what is missing.
+
 ---
 
 ## 8. ADME Data Sources
@@ -291,10 +338,11 @@ Color-coded cells with expandable detail view per tissue.
 | Source | Provides | Access |
 |--------|----------|--------|
 | ChEMBL | In vitro ADME (Caco-2, microsomal clearance, PPB, CYP inhibition) | REST API (free) |
-| DrugBank | Curated ADME summaries (Vd, clearance, half-life, metabolism enzymes) | XML download |
 | pkCSM | Predicted ADME from SMILES | Web tool |
 | SwissADME | ADME property prediction | Web tool |
 | ADMET-AI | ML-predicted ADME/Tox properties | Python package |
+
+**Note:** DrugBank is intentionally excluded from the default Phase 3 build path unless you explicitly obtain and document a license compatible with your intended distribution.
 
 ---
 
@@ -361,3 +409,4 @@ Color-coded cells with expandable detail view per tissue.
 4. DILI risk category shown for drugs in the DILIrank dataset
 5. At least 3 AOP chains are traceable from drug targets to adverse outcomes
 6. Multi-tissue impact table shows relative risk across 6-8 key organs
+7. Every risk/flag panel renders `positive|negative|unknown` explicitly (no silent missing data), and surfaces the relevant `version_snapshot`
