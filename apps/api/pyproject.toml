@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pathmind-api"
+version = "0.1.0"
+description = "PathMind V1 FastAPI backend"
+requires-python = ">=3.11"
+dependencies = [
+  "alembic>=1.14.0",
+  "fastapi>=0.115.7",
+  "httpx>=0.28.1",
+  "pydantic>=2.10.6",
+  "pydantic-settings>=2.7.1",
+  "psycopg[binary]>=3.2.4",
+  "redis>=5.2.1",
+  "sqlalchemy>=2.0.37",
+  "uvicorn>=0.34.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.4",
+  "pytest-asyncio>=0.25.2",
+  "pytest-cov>=6.0.0",
+  "respx>=0.22.0"
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+addopts = "-q"
+

@@ -1,0 +1,17 @@
+{
+  "name": "pathmind-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.2.0",
+  "scripts": {
+    "contracts:generate": "corepack pnpm --filter @pathmind/contracts generate",
+    "contracts:check": "corepack pnpm --filter @pathmind/contracts check",
+    "web:dev": "corepack pnpm --filter @pathmind/web dev",
+    "web:test:e2e": "corepack pnpm --filter @pathmind/web test:e2e",
+    "validate:local": "cd apps/api && ./.venv/bin/pytest -q && cd ../.. && corepack pnpm --filter @pathmind/web typecheck && corepack pnpm contracts:check"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.6.0",
+    "typescript": "^5.7.3"
+  }
+}

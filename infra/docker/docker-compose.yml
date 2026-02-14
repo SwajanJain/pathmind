@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: pathmind-postgres
+    environment:
+      POSTGRES_USER: pathmind
+      POSTGRES_PASSWORD: pathmind
+      POSTGRES_DB: pathmind
+    ports:
+      - "5432:5432"
+    volumes:
+      - pathmind-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pathmind -d pathmind"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: pathmind-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - pathmind-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pathmind-postgres:
+  pathmind-redis:
+
